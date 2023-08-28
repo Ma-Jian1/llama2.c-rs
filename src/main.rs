@@ -3,7 +3,7 @@ use std::fs::File;
 use anyhow::Result;
 use clap::Parser;
 
-use llama2::config::Config;
+use llama2::{config::Config, weights::TransformerWeights};
 
 #[derive(Parser, Debug)]
 #[command(author, version, about, long_about = None)]
@@ -27,6 +27,9 @@ fn main() -> Result<()> {
 
     let config = Config::from_reader(&mut file)?;
     println!("{config:#?}");
+
+    let weights = TransformerWeights::from_reader(&mut file, &config)?;
+    // println!("{weights:#?}");
 
     Ok(())
 }
