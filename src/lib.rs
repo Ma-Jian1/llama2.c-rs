@@ -4,6 +4,7 @@ use error::Result;
 
 pub mod config;
 pub mod error;
+pub mod state;
 pub mod weights;
 
 pub(crate) fn read_tensor<R: Read>(r: &mut R, num: usize) -> Result<Vec<f32>> {
