@@ -1,6 +1,6 @@
 use std::io::Read;
 
-use crate::{config::Config, error::Result, read_tensor};
+use crate::{config::Config, read_tensor, Result};
 
 type DType = f32;
 

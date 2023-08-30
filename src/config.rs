@@ -1,6 +1,6 @@
 use std::io::Read;
 
-use crate::error::Result;
+use crate::Result;
 
 #[derive(Debug)]
 #[repr(C)]
