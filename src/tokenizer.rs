@@ -12,8 +12,6 @@ pub enum SpecialToken {
 }
 
 pub struct Tokenizer {
-    vocab_size: usize,
-    max_token_length: i32,
     vocab_scores: Vec<f32>,
     bytes: Vec<u8>,
     offsets: Vec<usize>,
@@ -25,7 +23,8 @@ impl Tokenizer {
     pub fn new(tokenizer_path: &str, vocab_size: usize) -> Result<Self> {
         let mut file = File::open(tokenizer_path)?;
 
-        let max_token_length = read_i32(&mut file)?;
+        // don't used
+        let _max_token_length = read_i32(&mut file)?;
 
         let mut vocab_scores = Vec::<f32>::new();
         let mut bytes = Vec::<u8>::new();
@@ -54,8 +53,6 @@ impl Tokenizer {
         let ascii_pieces: Vec<String> = (0..=256).map(|i| (i as u8 as char).to_string()).collect();
 
         Ok(Self {
-            vocab_size,
-            max_token_length,
             vocab_scores,
             bytes,
             offsets,

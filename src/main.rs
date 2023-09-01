@@ -2,6 +2,7 @@ use anyhow::Result;
 use clap::Parser;
 
 use llama2::Llama2Model;
+use llama2::Sampler;
 use llama2::Tokenizer;
 
 #[derive(Parser, Debug)]
@@ -20,7 +21,7 @@ struct Args {
     steps: usize,
 
     /// [0, inf)
-    #[arg(short = 'T', long, default_value_t = 1.0)]
+    #[arg(short = 'T', long, default_value_t = 0.0)]
     temperature: f32,
 }
 
@@ -31,6 +32,8 @@ fn main() -> Result<()> {
 
     let tokenizer = Tokenizer::new(&args.tokenizer_path, model.config.vocab_size)?;
 
+    let sampler = Sampler::new(args.temperature);
+
     let steps = args.steps;
     let steps = if steps == 0 || steps > model.config.seq_len {
         model.config.seq_len
@@ -38,7 +41,7 @@ fn main() -> Result<()> {
         steps
     };
 
-    model.generate(&tokenizer, &args.prompt, steps, args.temperature)?;
+    model.generate(&tokenizer, &args.prompt, steps, &sampler)?;
 
     Ok(())
 }

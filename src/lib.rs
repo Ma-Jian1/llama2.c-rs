@@ -7,11 +7,13 @@ pub mod weights;
 
 mod error;
 mod model;
+mod sampler;
 mod tokenizer;
 
 pub use error::Llama2Error;
 pub use error::Result;
 pub use model::Llama2Model;
+pub use sampler::Sampler;
 pub use tokenizer::Tokenizer;
 
 // fn read_primitive<T, R: Read>(r: &mut R) -> Result<T> {

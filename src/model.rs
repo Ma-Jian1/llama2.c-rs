@@ -1,10 +1,10 @@
 use std::io::Write;
 use std::{fs::File, time::Instant};
 
-use crate::operator;
 use crate::tokenizer::{SpecialToken, Tokenizer};
 use crate::Result;
 use crate::{config::Config, state::State, weights::Weights};
+use crate::{operator, Sampler};
 
 pub struct Llama2Model {
     pub config: Config,
@@ -27,7 +27,7 @@ impl Llama2Model {
         tokenizer: &Tokenizer,
         prompt: &str,
         steps: usize,
-        temperature: f32,
+        sampler: &Sampler,
     ) -> Result<()> {
         let mut state = State::new(&self.config);
 
@@ -44,7 +44,7 @@ impl Llama2Model {
             let next_token = if pos < num_prompt_tokens - 1 {
                 prompt_tokens[pos + 1]
             } else {
-                self.sample(&mut state.logits, temperature)
+                sampler.sample(&mut state.logits)
             };
 
             // data-dependent terminating condition: the BOS (=1) token delimits sequences
@@ -71,22 +71,7 @@ impl Llama2Model {
         Ok(())
     }
 
-    pub fn forward(&mut self, state: &mut State, token: usize, pos: usize) {
-        let State {
-            x,
-            xb,
-            xb2,
-            hb,
-            hb2,
-            q,
-            k,
-            v,
-            att,
-            logits,
-            key_cache,
-            value_cache,
-        } = state;
-
+    pub fn forward(&mut self, s: &mut State, token: usize, pos: usize) {
         let Config {
             dim,
             hidden_dim,
@@ -95,7 +80,7 @@ impl Llama2Model {
             n_kv_heads,
             vocab_size,
             seq_len,
-            shared_weights: _,
+            ..
         } = self.config;
         let head_size = dim / n_heads;
         let kv_dim = n_kv_heads * head_size;
@@ -113,75 +98,52 @@ impl Llama2Model {
         } = &self.weights;
 
         // copy current token embedding
-        x.as_mut_slice()
+        s.x.as_mut_slice()
             .copy_from_slice(Self::unchecked_slice(token_embedding, dim, token));
 
         for layer in 0..n_layers {
             let rms_att_w = Self::unchecked_slice(rms_att, dim, layer);
-            operator::rmsnorm(xb, rms_att_w, x);
+            operator::rmsnorm(&mut s.xb, rms_att_w, &s.x);
 
             let wq = Self::unchecked_slice(wq, dim * dim, layer);
             let wk = Self::unchecked_slice(wk, dim * kv_dim, layer);
             let wv = Self::unchecked_slice(wv, dim * kv_dim, layer);
-            operator::matmul(q, wq, xb, dim, dim);
-            operator::matmul(k, wk, xb, dim, kv_dim);
-            operator::matmul(v, wv, xb, dim, kv_dim);
+            operator::matmul(&mut s.q, wq, &s.xb, dim, dim);
+            operator::matmul(&mut s.k, wk, &s.xb, dim, kv_dim);
+            operator::matmul(&mut s.v, wv, &s.xb, dim, kv_dim);
 
-            self.rope(q, k, head_size, pos);
+            self.rope(&mut s.q, &mut s.k, head_size, pos);
 
             // cache keys and values
             let idx = layer * seq_len + pos;
-            Self::unchecked_mut_slice(key_cache, kv_dim, idx).copy_from_slice(k);
-            Self::unchecked_mut_slice(value_cache, kv_dim, idx).copy_from_slice(v);
+            Self::unchecked_mut_slice(&mut s.key_cache, kv_dim, idx).copy_from_slice(&s.k);
+            Self::unchecked_mut_slice(&mut s.value_cache, kv_dim, idx).copy_from_slice(&s.v);
 
-            self.attention(
-                key_cache,
-                value_cache,
-                q,
-                xb,
-                att,
-                pos,
-                layer,
-                kv_dim,
-                n_layers,
-                n_heads,
-                head_size,
-                seq_len,
-            );
+            self.attention(s, pos, layer);
 
             let wo = Self::unchecked_slice(wo, dim * dim, layer);
-            operator::matmul(xb2, wo, xb, dim, dim);
+            operator::matmul(&mut s.xb2, wo, &s.xb, dim, dim);
 
             // post attention residual
-            x.iter_mut()
-                .zip(xb2.iter())
+            s.x.iter_mut()
+                .zip(s.xb2.iter())
                 .for_each(|(dst, src)| *dst += *src);
 
-            self.ffn(x, xb, hb, hb2, layer, dim, hidden_dim);
+            self.ffn(s, layer, dim, hidden_dim);
 
             // post ffn residual
-            x.iter_mut()
-                .zip(xb.iter())
+            s.x.iter_mut()
+                .zip(s.xb.iter())
                 .for_each(|(dst, src)| *dst += *src);
         }
 
         // last rmsnorm
-        operator::rmsnorm_inplace(x, rms_final);
+        operator::rmsnorm_inplace(&mut s.x, rms_final);
 
         if let Some(wcls) = wcls {
-            operator::matmul(logits, wcls, x, dim, vocab_size);
+            operator::matmul(&mut s.logits, wcls, &s.x, dim, vocab_size);
         } else {
-            operator::matmul(logits, token_embedding, x, dim, vocab_size);
-        }
-    }
-
-    pub fn sample(&mut self, logits: &mut [f32], temperature: f32) -> usize {
-        if temperature == 0.0 {
-            operator::argmax(logits)
-        } else {
-            logits.iter_mut().for_each(|logit| *logit /= temperature);
-            operator::softmax(logits);
-            operator::sample(logits)
+            operator::matmul(&mut s.logits, token_embedding, &s.x, dim, vocab_size);
         }
     }
 
@@ -191,91 +153,84 @@ impl Llama2Model {
         operator::rope(k, head_size, pos);
     }
 
-    fn attention(
-        &self,
-        key_cache: &[f32],
-        value_cache: &[f32],
-        q: &[f32],
-        xb: &mut [f32],
-        att: &mut [f32],
-        pos: usize,
-        layer: usize,
-        kv_dim: usize,
-        n_layers: usize,
-        n_heads: usize,
-        head_size: usize,
-        seq_len: usize,
-    ) {
-        // (seq_len, kv_dim)
-        let layer_cached_keys = Self::unchecked_slice(key_cache, seq_len * kv_dim, layer);
+    fn attention(&self, s: &mut State, pos: usize, layer: usize) {
+        let Config {
+            dim,
+            n_heads,
+            n_kv_heads,
+            seq_len,
+            ..
+        } = self.config;
+        let head_size = dim / n_heads;
+        let kv_dim = n_kv_heads * head_size;
+        // kv_mul q use one k head
+        let kv_mul = n_heads / n_kv_heads;
+
+        // (seq_len, kv_dim) == (seq_len, n_kv_heads, head_size)
+        let layer_cached_keys = Self::unchecked_slice(&s.key_cache, seq_len * kv_dim, layer);
+        let layer_cached_vals = Self::unchecked_slice(&s.value_cache, seq_len * kv_dim, layer);
 
         (0..n_heads).for_each(|h| {
-            let q = Self::unchecked_slice(q, head_size, h);
-            let xb = Self::unchecked_mut_slice(xb, head_size, h);
-            let att = Self::unchecked_mut_slice(att, seq_len, h);
-            let layer_cached_vals =
-                Self::unchecked_slice(value_cache, n_layers * seq_len * kv_dim, 0);
-
+            // get the query vector for this head
+            let q = Self::unchecked_slice(&s.q, head_size, h);
+            // attention scores for this head
+            let att = Self::unchecked_mut_slice(&mut s.att, seq_len, h);
             let mut head_k_all_pos = layer_cached_keys
                 .chunks_exact(head_size)
-                .skip(h)
-                .step_by(n_heads);
+                .skip(h / kv_mul)
+                .step_by(n_kv_heads);
 
+            // iterate over all timesteps, including the current one
             for t in 0..=pos {
-                let k = head_k_all_pos.next().unwrap();
-                let score = k
-                    .iter()
-                    .zip(q.iter())
-                    .fold(0f32, |acc, (_k, _q)| acc + _k * _q);
+                let k = head_k_all_pos.next().expect("head_k_all_pos");
+
+                // for head_size
+                let score = q.iter().zip(k.iter()).fold(0f32, |acc, (q, k)| acc + q * k);
                 let score = score / (head_size as f32).sqrt();
+
                 unsafe {
                     *att.get_unchecked_mut(t) = score;
                 }
             }
 
-            let seq_cached_vals = Self::unchecked_slice(layer_cached_vals, seq_len * kv_dim, layer)
-                .chunks_exact(head_size)
-                .skip(h)
-                .step_by(n_heads);
+            // softmax the scores to get attention weights, from 0..pos inclusively
             operator::softmax(&mut att[..=pos]);
 
-            let dst = xb;
-            dst.iter_mut().for_each(|v| *v = 0f32);
+            let seq_cached_vals = layer_cached_vals
+                .chunks_exact(head_size)
+                .skip(h / kv_mul)
+                .step_by(n_kv_heads);
+
+            let xb = Self::unchecked_mut_slice(&mut s.xb, head_size, h);
+            xb.iter_mut().for_each(|v| *v = 0f32);
             for (vals, att_w) in seq_cached_vals.zip(att.iter()).take(pos + 1) {
                 // aggretate timestamp to xb
-                for (val, dst) in vals.iter().zip(dst.iter_mut()) {
-                    *dst += val * att_w;
+                for (val, dst) in vals.iter().zip(xb.iter_mut()) {
+                    *dst += att_w * val;
                 }
             }
         })
     }
 
-    fn ffn(
-        &self,
-        x: &[f32],
-        xb: &mut [f32],
-        hb: &mut [f32],
-        hb2: &mut [f32],
-        layer: usize,
-        dim: usize,
-        hidden_dim: usize,
-    ) {
+    fn ffn(&self, s: &mut State, layer: usize, dim: usize, hidden_dim: usize) {
         let w = &self.weights;
         let rms_ffn_w = Self::unchecked_slice(&w.rms_ffn, dim, layer);
-        operator::rmsnorm(xb, rms_ffn_w, x);
+        operator::rmsnorm(&mut s.xb, rms_ffn_w, &s.x);
 
+        // up scale
         let w1 = Self::unchecked_slice(&w.w1, hidden_dim * dim, layer);
-        let w2 = Self::unchecked_slice(&w.w2, hidden_dim * dim, layer);
         let w3 = Self::unchecked_slice(&w.w3, hidden_dim * dim, layer);
-        operator::matmul(hb, w1, xb, dim, hidden_dim);
-        operator::matmul(hb2, w3, xb, dim, hidden_dim);
+        operator::matmul(&mut s.hb, w1, &s.xb, dim, hidden_dim);
+        operator::matmul(&mut s.hb2, w3, &s.xb, dim, hidden_dim);
         // silu
-        operator::silu(hb);
+        operator::silu(&mut s.hb);
 
-        hb.iter_mut()
-            .zip(hb2.iter())
+        // down scale
+        s.hb.iter_mut()
+            .zip(s.hb2.iter())
             .for_each(|(h1, &h2)| *h1 *= h2);
-        operator::matmul(xb, w2, hb, hidden_dim, dim);
+        let w2 = Self::unchecked_slice(&w.w2, dim * hidden_dim, layer);
+        operator::matmul(&mut s.xb, w2, &s.hb, hidden_dim, dim);
     }
 
     /// Treat s as 2-dimension array: [[Q; size]; x] and return &s[idx][..]
