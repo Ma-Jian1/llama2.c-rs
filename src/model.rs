@@ -4,7 +4,7 @@ use std::{fs::File, time::Instant};
 use crate::tokenizer::{SpecialToken, Tokenizer};
 use crate::Result;
 use crate::{config::Config, state::State, weights::Weights};
-use crate::{operator, Sampler};
+use crate::{kernel, Sampler};
 
 pub struct Llama2Model {
     pub config: Config,
@@ -103,14 +103,14 @@ impl Llama2Model {
 
         for layer in 0..n_layers {
             let rms_att_w = Self::unchecked_slice(rms_att, dim, layer);
-            operator::rmsnorm(&mut s.xb, rms_att_w, &s.x);
+            kernel::rmsnorm(&mut s.xb, rms_att_w, &s.x);
 
             let wq = Self::unchecked_slice(wq, dim * dim, layer);
             let wk = Self::unchecked_slice(wk, dim * kv_dim, layer);
             let wv = Self::unchecked_slice(wv, dim * kv_dim, layer);
-            operator::matmul(&mut s.q, wq, &s.xb, dim, dim);
-            operator::matmul(&mut s.k, wk, &s.xb, dim, kv_dim);
-            operator::matmul(&mut s.v, wv, &s.xb, dim, kv_dim);
+            kernel::matmul(&mut s.q, wq, &s.xb, dim, dim);
+            kernel::matmul(&mut s.k, wk, &s.xb, dim, kv_dim);
+            kernel::matmul(&mut s.v, wv, &s.xb, dim, kv_dim);
 
             self.rope(&mut s.q, &mut s.k, head_size, pos);
 
@@ -122,7 +122,7 @@ impl Llama2Model {
             self.attention(s, pos, layer);
 
             let wo = Self::unchecked_slice(wo, dim * dim, layer);
-            operator::matmul(&mut s.xb2, wo, &s.xb, dim, dim);
+            kernel::matmul(&mut s.xb2, wo, &s.xb, dim, dim);
 
             // post attention residual
             s.x.iter_mut()
@@ -138,19 +138,19 @@ impl Llama2Model {
         }
 
         // last rmsnorm
-        operator::rmsnorm_inplace(&mut s.x, rms_final);
+        kernel::rmsnorm_inplace(&mut s.x, rms_final);
 
         if let Some(wcls) = wcls {
-            operator::matmul(&mut s.logits, wcls, &s.x, dim, vocab_size);
+            kernel::matmul(&mut s.logits, wcls, &s.x, dim, vocab_size);
         } else {
-            operator::matmul(&mut s.logits, token_embedding, &s.x, dim, vocab_size);
+            kernel::matmul(&mut s.logits, token_embedding, &s.x, dim, vocab_size);
         }
     }
 
     fn rope(&self, q: &mut [f32], k: &mut [f32], head_size: usize, pos: usize) {
         // q may not equal to k, but they all should be divided by head_size
-        operator::rope(q, head_size, pos);
-        operator::rope(k, head_size, pos);
+        kernel::rope(q, head_size, pos);
+        kernel::rope(k, head_size, pos);
     }
 
     fn attention(&self, s: &mut State, pos: usize, layer: usize) {
@@ -194,7 +194,7 @@ impl Llama2Model {
             }
 
             // softmax the scores to get attention weights, from 0..pos inclusively
-            operator::softmax(&mut att[..=pos]);
+            kernel::softmax(&mut att[..=pos]);
 
             let seq_cached_vals = layer_cached_vals
                 .chunks_exact(head_size)
@@ -215,22 +215,22 @@ impl Llama2Model {
     fn ffn(&self, s: &mut State, layer: usize, dim: usize, hidden_dim: usize) {
         let w = &self.weights;
         let rms_ffn_w = Self::unchecked_slice(&w.rms_ffn, dim, layer);
-        operator::rmsnorm(&mut s.xb, rms_ffn_w, &s.x);
+        kernel::rmsnorm(&mut s.xb, rms_ffn_w, &s.x);
 
         // up scale
         let w1 = Self::unchecked_slice(&w.w1, hidden_dim * dim, layer);
         let w3 = Self::unchecked_slice(&w.w3, hidden_dim * dim, layer);
-        operator::matmul(&mut s.hb, w1, &s.xb, dim, hidden_dim);
-        operator::matmul(&mut s.hb2, w3, &s.xb, dim, hidden_dim);
+        kernel::matmul(&mut s.hb, w1, &s.xb, dim, hidden_dim);
+        kernel::matmul(&mut s.hb2, w3, &s.xb, dim, hidden_dim);
         // silu
-        operator::silu(&mut s.hb);
+        kernel::silu(&mut s.hb);
 
         // down scale
         s.hb.iter_mut()
             .zip(s.hb2.iter())
             .for_each(|(h1, &h2)| *h1 *= h2);
         let w2 = Self::unchecked_slice(&w.w2, dim * hidden_dim, layer);
-        operator::matmul(&mut s.xb, w2, &s.hb, hidden_dim, dim);
+        kernel::matmul(&mut s.xb, w2, &s.hb, hidden_dim, dim);
     }
 
     /// Treat s as 2-dimension array: [[Q; size]; x] and return &s[idx][..]

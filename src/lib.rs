@@ -1,7 +1,7 @@
 use std::io::Read;
 
 pub mod config;
-pub mod operator;
+pub mod kernel;
 pub mod state;
 pub mod weights;
 
