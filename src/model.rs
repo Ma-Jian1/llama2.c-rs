@@ -1,6 +1,7 @@
 use std::io::Write;
 use std::{fs::File, time::Instant};
 
+use crate::tensor::AsSlice;
 use crate::tokenizer::{SpecialToken, Tokenizer};
 use crate::Result;
 use crate::{config::Config, state::State, weights::Weights};
@@ -98,19 +99,22 @@ impl Llama2Model {
         } = &self.weights;
 
         // copy current token embedding
+        // s.x.as_mut_slice()
+        //     .copy_from_slice(Self::unchecked_slice(token_embedding, dim, token));
         s.x.as_mut_slice()
-            .copy_from_slice(Self::unchecked_slice(token_embedding, dim, token));
+            .copy_from_slice(token_embedding.as_slice(token).0);
 
         for layer in 0..n_layers {
-            let rms_att_w = Self::unchecked_slice(rms_att, dim, layer);
-            kernel::rmsnorm(&mut s.xb, rms_att_w, &s.x);
+            // let rms_att_w = Self::unchecked_slice(rms_att, dim, layer);
+            // let rms_att_w = rms_att.as_slice(layer).0;
+            kernel::rmsnorm(&mut s.xb, rms_att.as_slice(layer), &s.x);
 
-            let wq = Self::unchecked_slice(wq, dim * dim, layer);
-            let wk = Self::unchecked_slice(wk, dim * kv_dim, layer);
-            let wv = Self::unchecked_slice(wv, dim * kv_dim, layer);
-            kernel::matmul(&mut s.q, wq, &s.xb, dim, dim);
-            kernel::matmul(&mut s.k, wk, &s.xb, dim, kv_dim);
-            kernel::matmul(&mut s.v, wv, &s.xb, dim, kv_dim);
+            // let wq = Self::unchecked_slice(wq, dim * dim, layer);
+            // let wk = Self::unchecked_slice(wk, dim * kv_dim, layer);
+            // let wv = Self::unchecked_slice(wv, dim * kv_dim, layer);
+            kernel::matmul(&mut s.q, wq.as_slice(layer), &s.xb, dim, dim);
+            kernel::matmul(&mut s.k, wk.as_slice(layer), &s.xb, dim, kv_dim);
+            kernel::matmul(&mut s.v, wv.as_slice(layer), &s.xb, dim, kv_dim);
 
             self.rope(&mut s.q, &mut s.k, head_size, pos);
 
@@ -121,8 +125,8 @@ impl Llama2Model {
 
             self.attention(s, pos, layer);
 
-            let wo = Self::unchecked_slice(wo, dim * dim, layer);
-            kernel::matmul(&mut s.xb2, wo, &s.xb, dim, dim);
+            // let wo = Self::unchecked_slice(wo, dim * dim, layer);
+            kernel::matmul(&mut s.xb2, wo.as_slice(layer), &s.xb, dim, dim);
 
             // post attention residual
             s.x.iter_mut()
@@ -141,9 +145,9 @@ impl Llama2Model {
         kernel::rmsnorm_inplace(&mut s.x, rms_final);
 
         if let Some(wcls) = wcls {
-            kernel::matmul(&mut s.logits, wcls, &s.x, dim, vocab_size);
+            kernel::matmul_noscale(&mut s.logits, wcls, &s.x, dim, vocab_size);
         } else {
-            kernel::matmul(&mut s.logits, token_embedding, &s.x, dim, vocab_size);
+            kernel::matmul_noscale(&mut s.logits, token_embedding, &s.x, dim, vocab_size);
         }
     }
 
@@ -214,14 +218,14 @@ impl Llama2Model {
 
     fn ffn(&self, s: &mut State, layer: usize, dim: usize, hidden_dim: usize) {
         let w = &self.weights;
-        let rms_ffn_w = Self::unchecked_slice(&w.rms_ffn, dim, layer);
-        kernel::rmsnorm(&mut s.xb, rms_ffn_w, &s.x);
+        // let rms_ffn_w = Self::unchecked_slice(&w.rms_ffn, dim, layer);
+        kernel::rmsnorm(&mut s.xb, w.rms_ffn.as_slice(layer), &s.x);
 
         // up scale
-        let w1 = Self::unchecked_slice(&w.w1, hidden_dim * dim, layer);
-        let w3 = Self::unchecked_slice(&w.w3, hidden_dim * dim, layer);
-        kernel::matmul(&mut s.hb, w1, &s.xb, dim, hidden_dim);
-        kernel::matmul(&mut s.hb2, w3, &s.xb, dim, hidden_dim);
+        // let w1 = Self::unchecked_slice(&w.w1, hidden_dim * dim, layer);
+        // let w3 = Self::unchecked_slice(&w.w3, hidden_dim * dim, layer);
+        kernel::matmul(&mut s.hb, w.w1.as_slice(layer), &s.xb, dim, hidden_dim);
+        kernel::matmul(&mut s.hb2, w.w3.as_slice(layer), &s.xb, dim, hidden_dim);
         // silu
         kernel::silu(&mut s.hb);
 
@@ -229,8 +233,8 @@ impl Llama2Model {
         s.hb.iter_mut()
             .zip(s.hb2.iter())
             .for_each(|(h1, &h2)| *h1 *= h2);
-        let w2 = Self::unchecked_slice(&w.w2, dim * hidden_dim, layer);
-        kernel::matmul(&mut s.xb, w2, &s.hb, hidden_dim, dim);
+        // let w2 = Self::unchecked_slice(&w.w2, dim * hidden_dim, layer);
+        kernel::matmul(&mut s.xb, w.w2.as_slice(layer), &s.hb, hidden_dim, dim);
     }
 
     /// Treat s as 2-dimension array: [[Q; size]; x] and return &s[idx][..]

@@ -10,3 +10,7 @@ anyhow = "1.0.75"
 clap = { version = "4.4.0", features = ["derive"] }
 rand = { version = "0.8.5", features = ["small_rng"] }
 thiserror = "1.0.47"
+
+[features]
+defaults = []
+q8 = []

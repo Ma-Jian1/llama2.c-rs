@@ -2,17 +2,54 @@ use rand::rngs::SmallRng;
 use rand::Rng;
 use rand::SeedableRng;
 
-pub fn rmsnorm(out: &mut [f32], w: &[f32], x: &[f32]) {
+use crate::tensor::Q_GROUP_SIZE;
+
+pub fn rmsnorm<QType>(out: &mut [f32], (w, ws): (&[QType], &[f32]), x: &[f32])
+where
+    QType: Into<f32> + Copy,
+{
     debug_assert_eq!(out.len(), x.len());
     debug_assert_eq!(w.len(), x.len());
+
+    let ws_repeated = ws
+        .iter()
+        .flat_map(|n| std::iter::repeat(n).take(Q_GROUP_SIZE));
+    let packed_w = w.iter().copied().map(Into::<f32>::into).zip(ws_repeated);
 
     // sum(x^2)
     let ss = x.iter().fold(0f32, |init, &v| init + v * v) / (x.len() as f32);
     // 1.0 / sqrt(sum(x^2) + 1e-5)
     let ss = 1.0 / (ss + 1e-5).sqrt();
     out.iter_mut()
-        .zip(w.iter().zip(x.iter()))
-        .for_each(|(o, (w, x))| *o = w * (ss * x));
+        .zip(packed_w.zip(x.iter()))
+        .for_each(|(o, ((w, ws), x))| *o = ws * w * (ss * x));
+}
+
+/// W(d, n) * x(n,) -> out(d,)
+pub fn matmul<QType>(out: &mut [f32], (w, ws): (&[QType], &[f32]), x: &[f32], n: usize, d: usize)
+where
+    QType: Into<f32> + Copy,
+{
+    debug_assert_eq!(w.len(), d * n);
+    debug_assert_eq!(out.len(), d);
+    debug_assert_eq!(x.len(), n);
+
+    let ws_repeated = ws
+        .iter()
+        .flat_map(|n| std::iter::repeat(n).take(Q_GROUP_SIZE));
+    let w: Vec<_> = w
+        .iter()
+        .copied()
+        .map(Into::<f32>::into)
+        .zip(ws_repeated)
+        .map(|(w, ws)| ws * w)
+        .collect();
+    for (row, o) in w.chunks_exact(n).zip(out.iter_mut()) {
+        *o = row
+            .iter()
+            .zip(x.iter())
+            .fold(0f32, |acc, (&w, &x)| acc + w * x);
+    }
 }
 
 pub fn rmsnorm_inplace(x: &mut [f32], w: &[f32]) {
@@ -28,7 +65,10 @@ pub fn rmsnorm_inplace(x: &mut [f32], w: &[f32]) {
 }
 
 /// W(d, n) * x(n,) -> out(d,)
-pub fn matmul(out: &mut [f32], w: &[f32], x: &[f32], n: usize, d: usize) {
+pub fn matmul_noscale<QType>(out: &mut [f32], w: &[QType], x: &[f32], n: usize, d: usize)
+where
+    QType: Into<f32> + Copy,
+{
     debug_assert_eq!(w.len(), d * n);
     debug_assert_eq!(out.len(), d);
     debug_assert_eq!(x.len(), n);
@@ -37,7 +77,7 @@ pub fn matmul(out: &mut [f32], w: &[f32], x: &[f32], n: usize, d: usize) {
         *o = row
             .iter()
             .zip(x.iter())
-            .fold(0f32, |acc, (&w, &x)| acc + w * x);
+            .fold(0f32, |acc, (&w, &x)| acc + w.into() * x);
     }
 }
 
