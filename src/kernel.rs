@@ -2,104 +2,34 @@ use rand::rngs::SmallRng;
 use rand::Rng;
 use rand::SeedableRng;
 
-use crate::tensor::Q_GROUP_SIZE;
+use crate::Float;
 
-pub fn rmsnorm<QType>(out: &mut [f32], (w, ws): (&[QType], &[f32]), x: &[f32])
-where
-    QType: Into<f32> + Copy,
-{
-    debug_assert_eq!(out.len(), x.len());
-    debug_assert_eq!(w.len(), x.len());
-
-    let ws_repeated = ws
-        .iter()
-        .flat_map(|n| std::iter::repeat(n).take(Q_GROUP_SIZE));
-    let packed_w = w.iter().copied().map(Into::<f32>::into).zip(ws_repeated);
-
-    // sum(x^2)
-    let ss = x.iter().fold(0f32, |init, &v| init + v * v) / (x.len() as f32);
-    // 1.0 / sqrt(sum(x^2) + 1e-5)
-    let ss = 1.0 / (ss + 1e-5).sqrt();
-    out.iter_mut()
-        .zip(packed_w.zip(x.iter()))
-        .for_each(|(o, ((w, ws), x))| *o = ws * w * (ss * x));
-}
-
-/// W(d, n) * x(n,) -> out(d,)
-pub fn matmul<QType>(out: &mut [f32], (w, ws): (&[QType], &[f32]), x: &[f32], n: usize, d: usize)
-where
-    QType: Into<f32> + Copy,
-{
-    debug_assert_eq!(w.len(), d * n);
-    debug_assert_eq!(out.len(), d);
-    debug_assert_eq!(x.len(), n);
-
-    let ws_repeated = ws
-        .iter()
-        .flat_map(|n| std::iter::repeat(n).take(Q_GROUP_SIZE));
-    let w: Vec<_> = w
-        .iter()
-        .copied()
-        .map(Into::<f32>::into)
-        .zip(ws_repeated)
-        .map(|(w, ws)| ws * w)
-        .collect();
-    for (row, o) in w.chunks_exact(n).zip(out.iter_mut()) {
-        *o = row
-            .iter()
-            .zip(x.iter())
-            .fold(0f32, |acc, (&w, &x)| acc + w * x);
-    }
-}
-
-pub fn rmsnorm_inplace(x: &mut [f32], w: &[f32]) {
+/// inplace rmsnorm
+pub fn rmsnorm(x: &mut [Float], w: &[Float]) {
     debug_assert_eq!(w.len(), x.len());
 
     // sum(x^2)
-    let ss = x.iter().fold(0f32, |init, &v| init + v * v) / (x.len() as f32);
+    let ss = x.iter().fold(0 as Float, |init, &v| init + v * v) / (x.len() as f32);
     // 1.0 / sqrt(sum(x^2) + 1e-5)
-    let ss = 1.0 / (ss + 1e-5).sqrt();
+    let ss = 1 as Float / (ss + 1e-5).sqrt();
     x.iter_mut()
         .zip(w.iter())
         .for_each(|(x, w)| *x = w * (ss * *x));
 }
 
-/// W(d, n) * x(n,) -> out(d,)
-pub fn matmul_noscale<QType>(out: &mut [f32], w: &[QType], x: &[f32], n: usize, d: usize)
-where
-    QType: Into<f32> + Copy,
-{
-    debug_assert_eq!(w.len(), d * n);
-    debug_assert_eq!(out.len(), d);
-    debug_assert_eq!(x.len(), n);
-
-    for (row, o) in w.chunks_exact(n).zip(out.iter_mut()) {
-        *o = row
-            .iter()
-            .zip(x.iter())
-            .fold(0f32, |acc, (&w, &x)| acc + w.into() * x);
-    }
-}
-
-pub fn argmax(x: &[f32]) -> usize {
+pub fn argmax(x: &[Float]) -> usize {
     debug_assert!(!x.is_empty());
-    // println!("[");
-    // x.iter().for_each(|x| println!("    {:.6},", x));
-    // println!("]");
     x.iter()
         .enumerate()
         .max_by(|(_, a), (_, b)| a.total_cmp(b))
-        .map(|(index, _)| {
-            // println!("[{}]", index);
-            index
-        })
+        .map(|(index, _)| index)
         .expect("argmax")
 }
 
-pub fn softmax(x: &mut [f32]) {
+pub fn softmax(x: &mut [Float]) {
     debug_assert!(!x.is_empty());
-    let max_val = x.iter().fold(f32::NAN, |acc, &v| v.max(acc));
-    let mut sum = 0f32;
+    let max_val = x.iter().fold(Float::NAN, |acc, &v| v.max(acc));
+    let mut sum = 0 as Float;
     for v in x.iter_mut() {
         *v = (*v - max_val).exp();
         sum += *v;
@@ -107,12 +37,12 @@ pub fn softmax(x: &mut [f32]) {
     x.iter_mut().for_each(|v| *v /= sum);
 }
 
-pub fn rope(x: &mut [f32], head_size: usize, pos: usize) {
+pub fn rope(x: &mut [Float], head_size: usize, pos: usize) {
     // q may not equal to k, but they all should be divided by head_size
     for head in x.chunks_exact_mut(head_size) {
         for (i, v) in head.chunks_mut(2).enumerate() {
-            let freq = 1.0 / 10000f32.powf(2f32 * i as f32 / head_size as f32);
-            let val = pos as f32 * freq;
+            let freq = 1 as Float / 10000f32.powf(2 as Float * i as Float / head_size as Float);
+            let val = pos as Float * freq;
             let fcr = val.cos();
             let fci = val.sin();
 
@@ -125,16 +55,16 @@ pub fn rope(x: &mut [f32], head_size: usize, pos: usize) {
 }
 
 /// silu(x)=x*σ(x), where σ(x) is the logistic sigmoid
-pub fn silu(x: &mut [f32]) {
+pub fn silu(x: &mut [Float]) {
     x.iter_mut()
-        .for_each(|v| *v = (*v) * (1f32 / (1f32 + (-*v).exp())));
+        .for_each(|v| *v = (*v) * (1 as Float / (1 as Float + (-*v).exp())));
 }
 
-pub fn sample(probs: &[f32]) -> usize {
+pub fn sample(probs: &[Float]) -> usize {
     let mut rng = SmallRng::from_entropy();
-    let r = rng.gen::<f32>();
+    let r = rng.gen::<Float>();
 
-    let mut cdf = 0f32;
+    let mut cdf = 0 as Float;
     for (idx, p) in probs.iter().enumerate() {
         cdf += *p;
         if r < cdf {

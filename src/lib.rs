@@ -17,6 +17,9 @@ pub use model::Llama2Model;
 pub use sampler::Sampler;
 pub use tokenizer::Tokenizer;
 
+// in case we will support f16/bf16
+pub type Float = f32;
+
 // fn read_primitive<T, R: Read>(r: &mut R) -> Result<T> {
 //     let mut buf = [0u8; std::mem::size_of::<T>()];
 //     r.read_exact(&mut buf)?;
@@ -34,14 +37,3 @@ pub(crate) fn read_f32<R: Read>(r: &mut R) -> Result<f32> {
     r.read_exact(&mut buf)?;
     Ok(f32::from_le_bytes(buf))
 }
-
-// pub(crate) fn read_tensor<R: Read>(r: &mut R, num: usize) -> Result<Vec<f32>> {
-//     let bytes_to_read = num * std::mem::size_of::<f32>();
-//     let mut raw_tensor = vec![0; bytes_to_read];
-//     r.read_exact(&mut raw_tensor)?;
-//     unsafe {
-//         let float_ptr = raw_tensor.as_ptr() as *const f32;
-//         let tensor = std::slice::from_raw_parts(float_ptr, num);
-//         Ok(tensor.to_vec())
-//     }
-// }

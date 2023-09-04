@@ -1,42 +1,40 @@
-use crate::config::Config;
-
-pub type DType = f32;
+use crate::{config::Config, Float};
 
 pub struct State {
     /// activation at current time stamp
     /// (dim,)
-    pub x: Vec<DType>,
+    pub x: Vec<Float>,
     /// same, but inside a residual branch
     /// (dim,)
-    pub xb: Vec<DType>,
+    pub xb: Vec<Float>,
     /// an additional buffer just for convenience
     /// (dim,)
-    pub xb2: Vec<DType>,
+    pub xb2: Vec<Float>,
     /// buffer for hidden dimension in the ffn
     /// (hidden_dim,)
-    pub hb: Vec<DType>,
+    pub hb: Vec<Float>,
     /// buffer for hidden dimension in the ffn
     /// (hidden_dim,)
-    pub hb2: Vec<DType>,
+    pub hb2: Vec<Float>,
     /// query
     /// (dim,)
-    pub q: Vec<DType>,
+    pub q: Vec<Float>,
     /// key
     /// (kv_dim,)
-    pub k: Vec<DType>,
+    pub k: Vec<Float>,
     /// value
     /// (kv_dim,)
-    pub v: Vec<DType>,
+    pub v: Vec<Float>,
     /// buffer for scores/attention values
     /// (n_heads, seq_len)
-    pub att: Vec<DType>,
+    pub att: Vec<Float>,
     /// output logits
     /// (vocab_size,)
-    pub logits: Vec<DType>,
+    pub logits: Vec<Float>,
     /// kv cache
     /// (layer, seq_len, kv_dim)
-    pub key_cache: Vec<DType>,
-    pub value_cache: Vec<DType>,
+    pub key_cache: Vec<Float>,
+    pub value_cache: Vec<Float>,
 }
 
 impl State {
