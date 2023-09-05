@@ -5,6 +5,7 @@ use std::{
 
 use crate::{Float, Result};
 
+#[cfg(feature = "q8")]
 pub(crate) const Q_GROUP_SIZE: usize = 32;
 
 pub type DTensor = Tensor<Float>;
@@ -18,6 +19,7 @@ pub struct Tensor<QType> {
     weight: Vec<QType>,
     // from outer to inner: ..., row, col(group)
     layout: Vec<usize>,
+    #[cfg(feature = "q8")]
     scale: Vec<Float>,
 }
 
@@ -46,6 +48,7 @@ impl Index<usize> for Tensor<Float> {
 }
 
 /// Tensor<QType> which use scale
+#[cfg(feature = "q8")]
 impl<QType> Tensor<QType> {
     fn index_row_and_scale(&self, idx: usize) -> (&[QType], &[Float]) {
         let (rows, cols) = (self.layout[0], self.layout[1]);
@@ -66,6 +69,7 @@ impl<QType> Tensor<QType> {
     }
 }
 
+#[cfg(feature = "q8")]
 impl<QType> Tensor<QType>
 where
     QType: Into<Float> + Copy,
@@ -136,6 +140,7 @@ where
 
 impl Tensor<Float> {
     pub fn from_reader<R: Read>(r: &mut R, rows: usize, cols: usize) -> Result<Self> {
+        #[cfg(feature = "q8")]
         assert_eq!(cols % Q_GROUP_SIZE, 0);
 
         let num = rows * cols;
@@ -150,12 +155,64 @@ impl Tensor<Float> {
             Ok(Self {
                 weight: data,
                 layout: vec![rows, cols],
+                #[cfg(feature = "q8")]
                 scale: vec![1 as Float; (rows * cols) / Q_GROUP_SIZE],
             })
         }
     }
 }
 
+#[cfg(not(feature = "q8"))]
+impl Tensor<Float> {
+    pub fn rmsnorm(&self, out: &mut [Float], x: &[Float], row: usize) {
+        assert_eq!(out.len(), x.len());
+
+        let w = &self[row];
+        assert_eq!(w.len(), x.len());
+
+        // sum(x^2)
+        let ss = x.iter().fold(0 as Float, |init, &v| init + v * v) / (x.len() as Float);
+        // 1.0 / sqrt(sum(x^2) + 1e-5)
+        let ss = 1.0 / (ss + 1e-5).sqrt();
+        out.iter_mut()
+            .zip(w.iter().zip(x.iter()))
+            .for_each(|(o, (w, x))| *o = w * (ss * x));
+    }
+
+    /// W(d, n) * x(n,) -> out(d,)
+    pub fn matmul_3d(&self, out: &mut [Float], x: &[Float], n: usize, d: usize, row: usize) {
+        assert_eq!(out.len(), d);
+        assert_eq!(x.len(), n);
+
+        let w = &self[row];
+        assert_eq!(w.len(), d * n);
+
+        for (row, out) in w.chunks_exact(n).zip(out.iter_mut()) {
+            *out = row
+                .iter()
+                .zip(x.iter())
+                .fold(0 as Float, |acc, (w, x)| acc + w * x);
+        }
+    }
+
+    /// W(d, n) * x(n,) -> out(d,)
+    pub fn matmul(&self, out: &mut [Float], x: &[Float], n: usize, d: usize) {
+        let w = &self.weight;
+
+        assert_eq!(w.len(), d * n);
+        assert_eq!(out.len(), d);
+        assert_eq!(x.len(), n);
+
+        for (row, o) in w.chunks_exact(n).zip(out.iter_mut()) {
+            *o = row
+                .iter()
+                .zip(x.iter())
+                .fold(0 as Float, |acc, (&w, &x)| acc + w * x);
+        }
+    }
+}
+
+#[cfg(feature = "q8")]
 impl Tensor<i8> {
     pub fn from_reader<R: Read>(r: &mut R, rows: usize, cols: usize) -> Result<Self> {
         assert_eq!(cols % Q_GROUP_SIZE, 0);
