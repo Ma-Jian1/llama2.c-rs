@@ -15,7 +15,7 @@ pub use error::Llama2Error;
 pub use error::Result;
 pub use model::Llama2Model;
 pub use sampler::Sampler;
-pub use tokenizer::Tokenizer;
+pub use tokenizer::{SpecialToken, Tokenizer};
 
 // in case we will support f16/bf16
 pub type Float = f32;

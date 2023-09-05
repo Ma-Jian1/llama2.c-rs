@@ -135,10 +135,8 @@ impl Llama2Model {
         kernel::rmsnorm(&mut s.x, rms_final);
 
         if let Some(wcls) = wcls {
-            // kernel::matmul(&mut s.logits, wcls, &s.x, dim, vocab_size);
             wcls.matmul(&mut s.logits, &s.x, dim, vocab_size);
         } else {
-            // kernel::matmul(&mut s.logits, token_embedding, &s.x, dim, vocab_size);
             token_embedding.matmul(&mut s.logits, &s.x, dim, vocab_size);
         }
     }
