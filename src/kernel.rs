@@ -6,7 +6,7 @@ use crate::Float;
 
 /// inplace rmsnorm
 pub fn rmsnorm(x: &mut [Float], w: &[Float]) {
-    debug_assert_eq!(w.len(), x.len());
+    assert_eq!(w.len(), x.len());
 
     // sum(x^2)
     let ss = x.iter().fold(0 as Float, |init, &v| init + v * v) / (x.len() as f32);
@@ -18,7 +18,7 @@ pub fn rmsnorm(x: &mut [Float], w: &[Float]) {
 }
 
 pub fn argmax(x: &[Float]) -> usize {
-    debug_assert!(!x.is_empty());
+    assert!(!x.is_empty());
     x.iter()
         .enumerate()
         .max_by(|(_, a), (_, b)| a.total_cmp(b))
@@ -27,7 +27,7 @@ pub fn argmax(x: &[Float]) -> usize {
 }
 
 pub fn softmax(x: &mut [Float]) {
-    debug_assert!(!x.is_empty());
+    assert!(!x.is_empty());
     let max_val = x.iter().fold(Float::NAN, |acc, &v| v.max(acc));
     let mut sum = 0 as Float;
     for v in x.iter_mut() {

@@ -48,7 +48,7 @@ impl Tokenizer {
             let word = std::str::from_utf8(&bytes[begin..end])?.to_string();
             word_to_token_id.insert(word, i);
         }
-        debug_assert_eq!(offsets.len(), vocab_size + 1);
+        assert_eq!(offsets.len(), vocab_size + 1);
 
         let ascii_pieces: Vec<String> = (0..=256).map(|i| (i as u8 as char).to_string()).collect();
 
