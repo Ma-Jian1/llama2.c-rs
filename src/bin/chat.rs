@@ -42,6 +42,18 @@ fn main() -> Result<()> {
 
     let mut model = Llama2Model::new(&args.config_path)?;
 
+    #[cfg(feature = "parallel")]
+    {
+        let cpus = num_cpus::get();
+        let active_cpus = cpus.max(1).min(model.config.n_heads); // use 75% of available cores
+        println!("\n--> [Running Inference on {} CPUs]\n", active_cpus);
+
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(active_cpus)
+            .build_global()
+            .unwrap();
+    }
+
     let tokenizer = Tokenizer::new(&args.tokenizer_path, model.config.vocab_size)?;
 
     let sampler = Sampler::new(args.temperature);

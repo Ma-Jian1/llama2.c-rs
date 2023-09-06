@@ -1,6 +1,9 @@
 use std::io::Write;
 use std::{fs::File, time::Instant};
 
+#[cfg(feature = "parallel")]
+use rayon::prelude::{IntoParallelIterator, ParallelIterator};
+
 use crate::tokenizer::{SpecialToken, Tokenizer};
 use crate::Result;
 use crate::{config::Config, state::State, weights::Weights};
@@ -164,11 +167,12 @@ impl Llama2Model {
         let layer_cached_keys = Self::unchecked_slice(&s.key_cache, seq_len * kv_dim, layer);
         let layer_cached_vals = Self::unchecked_slice(&s.value_cache, seq_len * kv_dim, layer);
 
-        (0..n_heads).for_each(|h| {
+        let att_lambda = |h| {
             // get the query vector for this head
             let q = Self::unchecked_slice(&s.q, head_size, h);
             // attention scores for this head
-            let att = Self::unchecked_mut_slice(&mut s.att, seq_len, h);
+            // let att = Self::unchecked_mut_slice(&mut s.att, seq_len, h);
+            let att = Self::unchecked_mut_slice(&s.att, seq_len, h);
             let mut head_k_all_pos = layer_cached_keys
                 .chunks_exact(head_size)
                 .skip(h / kv_mul)
@@ -195,7 +199,8 @@ impl Llama2Model {
                 .skip(h / kv_mul)
                 .step_by(n_kv_heads);
 
-            let xb = Self::unchecked_mut_slice(&mut s.xb, head_size, h);
+            // let xb = Self::unchecked_mut_slice(&mut s.xb, head_size, h);
+            let xb = Self::unchecked_mut_slice(&s.xb, head_size, h);
             xb.iter_mut().for_each(|v| *v = 0f32);
             for (vals, att_w) in seq_cached_vals.zip(att.iter()).take(pos + 1) {
                 // aggretate timestamp to xb
@@ -203,7 +208,12 @@ impl Llama2Model {
                     *dst += att_w * val;
                 }
             }
-        })
+        };
+
+        #[cfg(not(feature = "parallel"))]
+        (0..n_heads).for_each(att_lambda);
+        #[cfg(feature = "parallel")]
+        (0..n_heads).into_par_iter().for_each(att_lambda);
     }
 
     fn ffn(&self, s: &mut State, layer: usize, dim: usize, hidden_dim: usize) {
@@ -233,8 +243,16 @@ impl Llama2Model {
     }
 
     /// Treat s as 2-dimension array: [[Q; size]; x] and return &s[idx][..]
-    fn unchecked_mut_slice<Q>(s: &mut [Q], size: usize, idx: usize) -> &mut [Q] {
-        let ptr = s.as_mut_ptr();
+    // fn unchecked_mut_slice<Q>(s: &mut [Q], size: usize, idx: usize) -> &mut [Q] {
+    //     let ptr = s.as_mut_ptr();
+    //     unsafe {
+    //         let offset = ptr.add(idx * size);
+    //         std::slice::from_raw_parts_mut(offset, size)
+    //     }
+    // }
+    fn unchecked_mut_slice<Q>(s: &[Q], size: usize, idx: usize) -> &mut [Q] {
+        // rayon parallel need lambda implement Fn not FnMut.
+        let ptr = s.as_ptr() as *mut Q;
         unsafe {
             let offset = ptr.add(idx * size);
             std::slice::from_raw_parts_mut(offset, size)

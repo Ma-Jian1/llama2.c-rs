@@ -3,6 +3,8 @@ use std::{
     ops::{Deref, Index},
 };
 
+use rayon::prelude::{IndexedParallelIterator, IntoParallelRefMutIterator, ParallelIterator};
+
 use crate::{Float, Result};
 
 #[cfg(feature = "q8")]
@@ -72,7 +74,7 @@ impl<QType> Tensor<QType> {
 #[cfg(feature = "q8")]
 impl<QType> Tensor<QType>
 where
-    QType: Into<Float> + Copy,
+    QType: Into<Float> + Copy + std::marker::Sync,
 {
     pub fn rmsnorm(&self, out: &mut [Float], x: &[Float], row: usize) {
         assert_eq!(out.len(), x.len());
@@ -103,6 +105,7 @@ where
         let (w, ws) = self.index_row_and_scale(row);
         assert_eq!(w.len(), d * n);
 
+        #[cfg(not(feature = "parallel"))]
         for ((row, ws), out) in w
             .chunks_exact(n)
             .zip(ws.chunks_exact(n / Q_GROUP_SIZE))
@@ -119,6 +122,21 @@ where
                 .zip(x.iter())
                 .fold(0 as Float, |acc, ((w, ws), x)| acc + ws * w * x);
         }
+        #[cfg(feature = "parallel")]
+        out.par_iter_mut().enumerate().for_each(|(i, out_val)| {
+            *out_val = 0 as Float;
+            for ((&w, &ws), &x) in w[i * n..(i + 1) * n]
+                .iter()
+                .zip(
+                    ws[i * n / Q_GROUP_SIZE..(i + 1) * n / Q_GROUP_SIZE]
+                        .iter()
+                        .flat_map(|ws| std::iter::repeat(ws).take(Q_GROUP_SIZE)),
+                )
+                .zip(x.iter())
+            {
+                *out_val += ws * w.into() * x;
+            }
+        })
     }
 
     /// W(d, n) * x(n,) -> out(d,)
@@ -129,12 +147,20 @@ where
         assert_eq!(out.len(), d);
         assert_eq!(x.len(), n);
 
+        #[cfg(not(feature = "parallel"))]
         for (row, o) in w.chunks_exact(n).zip(out.iter_mut()) {
             *o = row
                 .iter()
                 .zip(x.iter())
                 .fold(0 as Float, |acc, (&w, &x)| acc + w.into() * x);
         }
+        #[cfg(feature = "parallel")]
+        out.par_iter_mut().enumerate().for_each(|(i, out_val)| {
+            *out_val = w[i * n..(i + 1) * n]
+                .iter()
+                .zip(x.iter())
+                .fold(0 as Float, |acc, (&w, x)| acc + w.into() * x);
+        })
     }
 }
 
@@ -187,12 +213,20 @@ impl Tensor<Float> {
         let w = &self[row];
         assert_eq!(w.len(), d * n);
 
+        #[cfg(not(feature = "parallel"))]
         for (row, out) in w.chunks_exact(n).zip(out.iter_mut()) {
             *out = row
                 .iter()
                 .zip(x.iter())
                 .fold(0 as Float, |acc, (w, x)| acc + w * x);
         }
+        #[cfg(feature = "parallel")]
+        out.par_iter_mut().enumerate().for_each(|(i, out_val)| {
+            *out_val = w[i * n..(i + 1) * n]
+                .iter()
+                .zip(x.iter())
+                .fold(0 as Float, |acc, (w, x)| acc + w * x);
+        })
     }
 
     /// W(d, n) * x(n,) -> out(d,)
@@ -203,12 +237,20 @@ impl Tensor<Float> {
         assert_eq!(out.len(), d);
         assert_eq!(x.len(), n);
 
+        #[cfg(not(feature = "parallel"))]
         for (row, o) in w.chunks_exact(n).zip(out.iter_mut()) {
             *o = row
                 .iter()
                 .zip(x.iter())
                 .fold(0 as Float, |acc, (&w, &x)| acc + w * x);
         }
+        #[cfg(feature = "parallel")]
+        out.par_iter_mut().enumerate().for_each(|(i, out_val)| {
+            *out_val = self[i]
+                .iter()
+                .zip(x.iter())
+                .fold(0 as Float, |acc, (w, x)| acc + w * x);
+        })
     }
 }
 
