@@ -112,11 +112,12 @@ fn main() -> Result<()> {
         }
 
         model.forward(&mut state, token, pos);
-        next_token = sampler.sample(&mut state.logits);
 
         if prompt_token_idx < prompt_tokens.len() {
             continue;
         }
+
+        next_token = sampler.sample(&mut state.logits);
 
         if next_token == SpecialToken::Eos as usize {
             println!();
