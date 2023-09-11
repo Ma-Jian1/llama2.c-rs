@@ -231,7 +231,7 @@ impl Tensor<i8> {
         let (data, scale): (Vec<_>, Vec<_>) = data
             .chunks_exact(Q_GROUP_SIZE)
             .map(|group| {
-                let max_val = group.iter().fold(Float::NAN, |acc, &v| v.max(acc));
+                let max_val = group.iter().fold(Float::NAN, |acc, &v| v.abs().max(acc));
                 let inv_scale = i8::MAX as Float / max_val;
                 let group = group
                     .iter()
