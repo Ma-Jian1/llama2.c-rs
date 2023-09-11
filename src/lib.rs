@@ -8,6 +8,8 @@ pub mod weights;
 
 mod error;
 mod model;
+#[cfg(feature = "q8")]
+mod quant;
 mod sampler;
 mod tokenizer;
 

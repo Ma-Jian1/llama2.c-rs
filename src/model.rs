@@ -1,6 +1,8 @@
 use std::io::Write;
 use std::{fs::File, time::Instant};
 
+#[cfg(feature = "q8")]
+use crate::quant::quantize;
 use crate::tokenizer::{SpecialToken, Tokenizer};
 use crate::Result;
 use crate::{config::Config, state::State, weights::Weights};
@@ -103,9 +105,22 @@ impl Llama2Model {
         for layer in 0..n_layers {
             rms_att.rmsnorm(&mut s.xb, &s.x, layer);
 
-            wq.matmul_3d(&mut s.q, &s.xb, dim, dim, layer);
-            wk.matmul_3d(&mut s.k, &s.xb, dim, kv_dim, layer);
-            wv.matmul_3d(&mut s.v, &s.xb, dim, kv_dim, layer);
+            #[cfg(feature = "q8")]
+            {
+                quantize(&mut s.qxb, &mut s.sxb, &s.xb);
+                // println!("{:#?}", s.xb);
+                // println!("{:#?}", s.qxb);
+                // println!("{:#?}", s.sxb);
+                wq.qmatmul_3d(&mut s.q, &s.qxb, &s.sxb, dim, dim, layer);
+                wk.qmatmul_3d(&mut s.k, &s.qxb, &s.sxb, dim, kv_dim, layer);
+                wv.qmatmul_3d(&mut s.v, &s.qxb, &s.sxb, dim, kv_dim, layer);
+            }
+            #[cfg(not(feature = "q8"))]
+            {
+                wq.matmul_3d(&mut s.q, &s.xb, dim, dim, layer);
+                wk.matmul_3d(&mut s.k, &s.xb, dim, kv_dim, layer);
+                wv.matmul_3d(&mut s.v, &s.xb, dim, kv_dim, layer);
+            }
 
             self.rope(&mut s.q, &mut s.k, head_size, pos);
 
@@ -116,7 +131,15 @@ impl Llama2Model {
 
             self.attention(s, pos, layer);
 
-            wo.matmul_3d(&mut s.xb2, &s.xb, dim, dim, layer);
+            #[cfg(feature = "q8")]
+            {
+                quantize(&mut s.qxb, &mut s.sxb, &s.xb);
+                wo.qmatmul_3d(&mut s.xb2, &s.qxb, &s.sxb, dim, dim, layer);
+            }
+            #[cfg(not(feature = "q8"))]
+            {
+                wo.matmul_3d(&mut s.xb2, &s.xb, dim, dim, layer);
+            }
 
             // post attention residual
             s.x.iter_mut()
@@ -210,9 +233,18 @@ impl Llama2Model {
         let w = &self.weights;
         w.rms_ffn.rmsnorm(&mut s.xb, &s.x, layer);
 
-        // up scale
-        w.w1.matmul_3d(&mut s.hb, &s.xb, dim, hidden_dim, layer);
-        w.w3.matmul_3d(&mut s.hb2, &s.xb, dim, hidden_dim, layer);
+        #[cfg(feature = "q8")]
+        {
+            quantize(&mut s.qxb, &mut s.sxb, &s.xb);
+            w.w1.qmatmul_3d(&mut s.hb, &s.qxb, &s.sxb, dim, hidden_dim, layer);
+            w.w3.qmatmul_3d(&mut s.hb2, &s.qxb, &s.sxb, dim, hidden_dim, layer);
+        }
+        #[cfg(not(feature = "q8"))]
+        {
+            // up scale
+            w.w1.matmul_3d(&mut s.hb, &s.xb, dim, hidden_dim, layer);
+            w.w3.matmul_3d(&mut s.hb2, &s.xb, dim, hidden_dim, layer);
+        }
         // silu
         kernel::silu(&mut s.hb);
 
@@ -220,7 +252,15 @@ impl Llama2Model {
         s.hb.iter_mut()
             .zip(s.hb2.iter())
             .for_each(|(h1, &h2)| *h1 *= h2);
-        w.w2.matmul_3d(&mut s.xb, &s.hb, hidden_dim, dim, layer);
+        #[cfg(feature = "q8")]
+        {
+            quantize(&mut s.qhb, &mut s.shb, &s.hb);
+            w.w2.qmatmul_3d(&mut s.xb, &s.qhb, &s.shb, hidden_dim, dim, layer);
+        }
+        #[cfg(not(feature = "q8"))]
+        {
+            w.w2.matmul_3d(&mut s.xb, &s.hb, hidden_dim, dim, layer);
+        }
     }
 
     /// Treat s as 2-dimension array: [[Q; size]; x] and return &s[idx][..]

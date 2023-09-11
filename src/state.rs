@@ -1,3 +1,5 @@
+#[cfg(feature = "q8")]
+use crate::tensor::Q_GROUP_SIZE;
 use crate::{config::Config, Float};
 
 pub struct State {
@@ -7,12 +9,24 @@ pub struct State {
     /// same, but inside a residual branch
     /// (dim,)
     pub xb: Vec<Float>,
+    #[cfg(feature = "q8")]
+    /// (dim,)
+    pub qxb: Vec<i8>,
+    #[cfg(feature = "q8")]
+    /// (dim/Q_GROUP_SIZE,)
+    pub sxb: Vec<Float>,
     /// an additional buffer just for convenience
     /// (dim,)
     pub xb2: Vec<Float>,
     /// buffer for hidden dimension in the ffn
     /// (hidden_dim,)
     pub hb: Vec<Float>,
+    #[cfg(feature = "q8")]
+    /// (hidden_dim,)
+    pub qhb: Vec<i8>,
+    #[cfg(feature = "q8")]
+    /// (hidden_dim/Q_GROUP_SIZE,)
+    pub shb: Vec<Float>,
     /// buffer for hidden dimension in the ffn
     /// (hidden_dim,)
     pub hb2: Vec<Float>,
@@ -43,8 +57,16 @@ impl State {
         Self {
             x: vec![0.0; conf.dim],
             xb: vec![0.0; conf.dim],
+            #[cfg(feature = "q8")]
+            qxb: vec![0; conf.dim],
+            #[cfg(feature = "q8")]
+            sxb: vec![0.0; conf.dim / Q_GROUP_SIZE],
             xb2: vec![0.0; conf.dim],
             hb: vec![0.0; conf.hidden_dim],
+            #[cfg(feature = "q8")]
+            qhb: vec![0; conf.hidden_dim],
+            #[cfg(feature = "q8")]
+            shb: vec![0.0; conf.hidden_dim / Q_GROUP_SIZE],
             hb2: vec![0.0; conf.hidden_dim],
             q: vec![0.0; conf.dim],
             k: vec![0.0; kv_dim],

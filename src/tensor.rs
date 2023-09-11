@@ -120,6 +120,51 @@ where
                 .fold(0 as Float, |acc, ((w, ws), x)| acc + ws * w * x);
         }
     }
+    /// W(d, n) * x(n,) -> out(d,)
+    pub fn qmatmul_3d(
+        &self,
+        out: &mut [Float],
+        qx: &[QType],
+        sx: &[Float],
+        n: usize,
+        d: usize,
+        row: usize,
+    ) where
+        QType: Into<i16> + std::ops::Mul<QType, Output = QType>,
+    {
+        assert_eq!(out.len(), d);
+        assert_eq!(qx.len(), n);
+        assert_eq!(n % Q_GROUP_SIZE, 0);
+
+        let (w, ws) = self.index_row_and_scale(row);
+        assert_eq!(w.len(), d * n);
+
+        for i in 0..d {
+            let mut fval = 0_f32;
+            for j in (0..n).step_by(Q_GROUP_SIZE) {
+                let mut ival = 0_i16;
+                for k in 0..Q_GROUP_SIZE {
+                    // let w = w[i * n + j + k];
+                    // let q = qx[j + k];
+                    // ival += Into::<i16>::into(w) * Into::<i16>::into(q);
+                    unsafe {
+                        let w = w.get_unchecked(i * n + j + k);
+                        let q = qx.get_unchecked(j + k);
+                        ival += Into::<i16>::into(*w) * Into::<i16>::into(*q);
+                    }
+                }
+                // let ws = ws[(i * n + j) / Q_GROUP_SIZE];
+                // let qs = sx[j / Q_GROUP_SIZE];
+                // fval += Into::<f32>::into(ival) * ws * qs;
+                unsafe {
+                    let ws = ws.get_unchecked((i * n + j) / Q_GROUP_SIZE);
+                    let qs = sx.get_unchecked(j / Q_GROUP_SIZE);
+                    fval += Into::<f32>::into(ival) * ws * qs;
+                }
+            }
+            out[i] = fval;
+        }
+    }
 
     /// W(d, n) * x(n,) -> out(d,)
     pub fn matmul(&self, out: &mut [Float], x: &[Float], n: usize, d: usize) {
