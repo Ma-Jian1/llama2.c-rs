@@ -8,7 +8,7 @@ use crate::{
 
 #[derive(Debug)]
 pub struct Weights {
-    /// (vocab_size, dim)
+    /// (vocab_size, dim) == (1, vacab_size, dim)
     pub token_embedding: DTensor,
     /// (layer, dim) rmsnorm weights
     pub rms_att: DTensor,
@@ -42,7 +42,7 @@ impl Weights {
     pub fn from_reader<R: Read>(r: &mut R, cfg: &Config) -> Result<Self> {
         let head_size = cfg.dim / cfg.n_heads;
         let mut weights = Self {
-            token_embedding: DTensor::from_reader(r, cfg.vocab_size, cfg.dim)?,
+            token_embedding: DTensor::from_reader(r, 1, cfg.vocab_size * cfg.dim)?,
             rms_att: DTensor::from_reader(r, cfg.n_layers, cfg.dim)?,
             wq: QTensor::from_reader(r, cfg.n_layers, cfg.dim * (cfg.n_heads * head_size))?,
             wk: QTensor::from_reader(r, cfg.n_layers, cfg.dim * cfg.n_kv_heads * head_size)?,
@@ -60,7 +60,7 @@ impl Weights {
             let _ = QTensor::from_reader(r, cfg.seq_len, head_size / 2);
             // skip what used to be freq_cis_imag (for RoPE)
             let _ = QTensor::from_reader(r, cfg.seq_len, head_size / 2);
-            weights.wcls = Some(DTensor::from_reader(r, cfg.vocab_size, cfg.dim)?);
+            weights.wcls = Some(DTensor::from_reader(r, 1, cfg.vocab_size * cfg.dim)?);
         }
 
         Ok(weights)

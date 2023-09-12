@@ -98,14 +98,15 @@ impl Llama2Model {
         } = &self.weights;
 
         // copy current token embedding
-        s.x.as_mut_slice().copy_from_slice(&token_embedding[token]);
+        s.x.as_mut_slice()
+            .copy_from_slice(&token_embedding[0][token * dim..(token + 1) * dim]);
 
         for layer in 0..n_layers {
             rms_att.rmsnorm(&mut s.xb, &s.x, layer);
 
-            wq.matmul_3d(&mut s.q, &s.xb, dim, dim, layer);
-            wk.matmul_3d(&mut s.k, &s.xb, dim, kv_dim, layer);
-            wv.matmul_3d(&mut s.v, &s.xb, dim, kv_dim, layer);
+            wq.matmul(&mut s.q, &s.xb, dim, dim, layer);
+            wk.matmul(&mut s.k, &s.xb, dim, kv_dim, layer);
+            wv.matmul(&mut s.v, &s.xb, dim, kv_dim, layer);
 
             self.rope(&mut s.q, &mut s.k, head_size, pos);
 
@@ -116,7 +117,7 @@ impl Llama2Model {
 
             self.attention(s, pos, layer);
 
-            wo.matmul_3d(&mut s.xb2, &s.xb, dim, dim, layer);
+            wo.matmul(&mut s.xb2, &s.xb, dim, dim, layer);
 
             // post attention residual
             s.x.iter_mut()
@@ -132,12 +133,12 @@ impl Llama2Model {
         }
 
         // last rmsnorm
-        kernel::rmsnorm(&mut s.x, rms_final);
+        rms_final.rmsnorm(&mut s.xb, &s.x, 0);
 
         if let Some(wcls) = wcls {
-            wcls.matmul(&mut s.logits, &s.x, dim, vocab_size);
+            wcls.matmul(&mut s.logits, &s.xb, dim, vocab_size, 0);
         } else {
-            token_embedding.matmul(&mut s.logits, &s.x, dim, vocab_size);
+            token_embedding.matmul(&mut s.logits, &s.xb, dim, vocab_size, 0);
         }
     }
 
@@ -169,40 +170,42 @@ impl Llama2Model {
             let q = Self::unchecked_slice(&s.q, head_size, h);
             // attention scores for this head
             let att = Self::unchecked_mut_slice(&mut s.att, seq_len, h);
-            let mut head_k_all_pos = layer_cached_keys
-                .chunks_exact(head_size)
-                .skip(h / kv_mul)
-                .step_by(n_kv_heads);
+            att.iter_mut()
+                .zip(
+                    layer_cached_keys
+                        .chunks_exact(head_size)
+                        .skip(h / kv_mul)
+                        .step_by(n_kv_heads),
+                )
+                // iterate over all timesteps, including the current one
+                .take(pos + 1)
+                .for_each(|(att, k)| {
+                    // for head_size
+                    let score = q.iter().zip(k.iter()).fold(0f32, |acc, (q, k)| acc + q * k);
+                    let score = score / (head_size as f32).sqrt();
 
-            // iterate over all timesteps, including the current one
-            for t in 0..=pos {
-                let k = head_k_all_pos.next().expect("head_k_all_pos");
-
-                // for head_size
-                let score = q.iter().zip(k.iter()).fold(0f32, |acc, (q, k)| acc + q * k);
-                let score = score / (head_size as f32).sqrt();
-
-                unsafe {
-                    *att.get_unchecked_mut(t) = score;
-                }
-            }
+                    *att = score;
+                });
 
             // softmax the scores to get attention weights, from 0..pos inclusively
             kernel::softmax(&mut att[..=pos]);
 
-            let seq_cached_vals = layer_cached_vals
-                .chunks_exact(head_size)
-                .skip(h / kv_mul)
-                .step_by(n_kv_heads);
-
             let xb = Self::unchecked_mut_slice(&mut s.xb, head_size, h);
             xb.iter_mut().for_each(|v| *v = 0f32);
-            for (vals, att_w) in seq_cached_vals.zip(att.iter()).take(pos + 1) {
-                // aggretate timestamp to xb
-                for (val, dst) in vals.iter().zip(xb.iter_mut()) {
-                    *dst += att_w * val;
-                }
-            }
+
+            att.iter()
+                .zip(
+                    layer_cached_vals
+                        .chunks_exact(head_size)
+                        .skip(h / kv_mul)
+                        .step_by(n_kv_heads),
+                )
+                .take(pos + 1)
+                .for_each(|(att, vals)| {
+                    xb.iter_mut().zip(vals.iter()).for_each(|(xb, val)| {
+                        *xb += att * val;
+                    })
+                });
         })
     }
 
@@ -211,8 +214,8 @@ impl Llama2Model {
         w.rms_ffn.rmsnorm(&mut s.xb, &s.x, layer);
 
         // up scale
-        w.w1.matmul_3d(&mut s.hb, &s.xb, dim, hidden_dim, layer);
-        w.w3.matmul_3d(&mut s.hb2, &s.xb, dim, hidden_dim, layer);
+        w.w1.matmul(&mut s.hb, &s.xb, dim, hidden_dim, layer);
+        w.w3.matmul(&mut s.hb2, &s.xb, dim, hidden_dim, layer);
         // silu
         kernel::silu(&mut s.hb);
 
@@ -220,7 +223,7 @@ impl Llama2Model {
         s.hb.iter_mut()
             .zip(s.hb2.iter())
             .for_each(|(h1, &h2)| *h1 *= h2);
-        w.w2.matmul_3d(&mut s.xb, &s.hb, hidden_dim, dim, layer);
+        w.w2.matmul(&mut s.xb, &s.hb, hidden_dim, dim, layer);
     }
 
     /// Treat s as 2-dimension array: [[Q; size]; x] and return &s[idx][..]

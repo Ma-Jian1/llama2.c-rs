@@ -95,7 +95,7 @@ where
     }
 
     /// W(d, n) * x(n,) -> out(d,)
-    pub fn matmul_3d(&self, out: &mut [Float], x: &[Float], n: usize, d: usize, row: usize) {
+    pub fn matmul(&self, out: &mut [Float], x: &[Float], n: usize, d: usize, row: usize) {
         assert_eq!(out.len(), d);
         assert_eq!(x.len(), n);
         assert_eq!(n % Q_GROUP_SIZE, 0);
@@ -118,22 +118,6 @@ where
                 .zip(ws)
                 .zip(x.iter())
                 .fold(0 as Float, |acc, ((w, ws), x)| acc + ws * w * x);
-        }
-    }
-
-    /// W(d, n) * x(n,) -> out(d,)
-    pub fn matmul(&self, out: &mut [Float], x: &[Float], n: usize, d: usize) {
-        let w = &self.weight;
-
-        assert_eq!(w.len(), d * n);
-        assert_eq!(out.len(), d);
-        assert_eq!(x.len(), n);
-
-        for (row, o) in w.chunks_exact(n).zip(out.iter_mut()) {
-            *o = row
-                .iter()
-                .zip(x.iter())
-                .fold(0 as Float, |acc, (&w, &x)| acc + w.into() * x);
         }
     }
 }
@@ -180,7 +164,7 @@ impl Tensor<Float> {
     }
 
     /// W(d, n) * x(n,) -> out(d,)
-    pub fn matmul_3d(&self, out: &mut [Float], x: &[Float], n: usize, d: usize, row: usize) {
+    pub fn matmul(&self, out: &mut [Float], x: &[Float], n: usize, d: usize, row: usize) {
         assert_eq!(out.len(), d);
         assert_eq!(x.len(), n);
 
@@ -192,22 +176,6 @@ impl Tensor<Float> {
                 .iter()
                 .zip(x.iter())
                 .fold(0 as Float, |acc, (w, x)| acc + w * x);
-        }
-    }
-
-    /// W(d, n) * x(n,) -> out(d,)
-    pub fn matmul(&self, out: &mut [Float], x: &[Float], n: usize, d: usize) {
-        let w = &self.weight;
-
-        assert_eq!(w.len(), d * n);
-        assert_eq!(out.len(), d);
-        assert_eq!(x.len(), n);
-
-        for (row, o) in w.chunks_exact(n).zip(out.iter_mut()) {
-            *o = row
-                .iter()
-                .zip(x.iter())
-                .fold(0 as Float, |acc, (&w, &x)| acc + w * x);
         }
     }
 }

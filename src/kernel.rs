@@ -4,19 +4,6 @@ use rand::SeedableRng;
 
 use crate::Float;
 
-/// inplace rmsnorm
-pub fn rmsnorm(x: &mut [Float], w: &[Float]) {
-    assert_eq!(w.len(), x.len());
-
-    // sum(x^2)
-    let ss = x.iter().fold(0 as Float, |init, &v| init + v * v) / (x.len() as f32);
-    // 1.0 / sqrt(sum(x^2) + 1e-5)
-    let ss = 1 as Float / (ss + 1e-5).sqrt();
-    x.iter_mut()
-        .zip(w.iter())
-        .for_each(|(x, w)| *x = w * (ss * *x));
-}
-
 pub fn argmax(x: &[Float]) -> usize {
     assert!(!x.is_empty());
     x.iter()
