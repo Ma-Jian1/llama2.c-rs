@@ -17,9 +17,6 @@ pub use model::Llama2Model;
 pub use sampler::Sampler;
 pub use tokenizer::{SpecialToken, Tokenizer};
 
-// in case we will support f16/bf16
-pub type Float = f32;
-
 // fn read_primitive<T, R: Read>(r: &mut R) -> Result<T> {
 //     let mut buf = [0u8; std::mem::size_of::<T>()];
 //     r.read_exact(&mut buf)?;

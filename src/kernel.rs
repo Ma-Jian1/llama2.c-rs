@@ -2,7 +2,7 @@ use rand::rngs::SmallRng;
 use rand::Rng;
 use rand::SeedableRng;
 
-use crate::Float;
+use crate::tensor::Float;
 
 pub fn argmax(x: &[Float]) -> usize {
     assert!(!x.is_empty());

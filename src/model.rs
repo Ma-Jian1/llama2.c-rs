@@ -79,7 +79,6 @@ impl Llama2Model {
             n_heads,
             n_kv_heads,
             vocab_size,
-            seq_len,
             ..
         } = self.config;
         let head_size = dim / n_heads;
@@ -98,8 +97,8 @@ impl Llama2Model {
         } = &self.weights;
 
         // copy current token embedding
-        s.x.as_mut_slice()
-            .copy_from_slice(&token_embedding[0][token * dim..(token + 1) * dim]);
+        // s.x.copy_from_slice(&token_embedding[0][token * dim..(token + 1) * dim]);
+        s.x.copy_from_slice(token_embedding.unchecked_slice(dim, token));
 
         for layer in 0..n_layers {
             rms_att.rmsnorm(&mut s.xb, &s.x, layer);
@@ -111,9 +110,8 @@ impl Llama2Model {
             self.rope(&mut s.q, &mut s.k, head_size, pos);
 
             // cache keys and values
-            let idx = layer * seq_len + pos;
-            Self::unchecked_mut_slice(&mut s.key_cache, kv_dim, idx).copy_from_slice(&s.k);
-            Self::unchecked_mut_slice(&mut s.value_cache, kv_dim, idx).copy_from_slice(&s.v);
+            s.key_cache[(layer, pos)].copy_from_slice(&s.k);
+            s.value_cache[(layer, pos)].copy_from_slice(&s.v);
 
             self.attention(s, pos, layer);
 
@@ -153,23 +151,21 @@ impl Llama2Model {
             dim,
             n_heads,
             n_kv_heads,
-            seq_len,
             ..
         } = self.config;
         let head_size = dim / n_heads;
-        let kv_dim = n_kv_heads * head_size;
         // kv_mul q use one k head
         let kv_mul = n_heads / n_kv_heads;
 
         // (seq_len, kv_dim) == (seq_len, n_kv_heads, head_size)
-        let layer_cached_keys = Self::unchecked_slice(&s.key_cache, seq_len * kv_dim, layer);
-        let layer_cached_vals = Self::unchecked_slice(&s.value_cache, seq_len * kv_dim, layer);
+        let layer_cached_keys = &s.key_cache[layer];
+        let layer_cached_vals = &s.value_cache[layer];
 
         (0..n_heads).for_each(|h| {
             // get the query vector for this head
-            let q = Self::unchecked_slice(&s.q, head_size, h);
+            let q = s.q.unchecked_slice(head_size, h);
             // attention scores for this head
-            let att = Self::unchecked_mut_slice(&mut s.att, seq_len, h);
+            let att = &mut s.att[h];
             att.iter_mut()
                 .zip(
                     layer_cached_keys
@@ -190,9 +186,8 @@ impl Llama2Model {
             // softmax the scores to get attention weights, from 0..pos inclusively
             kernel::softmax(&mut att[..=pos]);
 
-            let xb = Self::unchecked_mut_slice(&mut s.xb, head_size, h);
+            let xb = s.xb.unchecked_mut_slice(head_size, h);
             xb.iter_mut().for_each(|v| *v = 0f32);
-
             att.iter()
                 .zip(
                     layer_cached_vals
@@ -224,23 +219,5 @@ impl Llama2Model {
             .zip(s.hb2.iter())
             .for_each(|(h1, &h2)| *h1 *= h2);
         w.w2.matmul(&mut s.xb, &s.hb, hidden_dim, dim, layer);
-    }
-
-    /// Treat s as 2-dimension array: [[Q; size]; x] and return &s[idx][..]
-    fn unchecked_slice<Q>(s: &[Q], size: usize, idx: usize) -> &[Q] {
-        let ptr = s.as_ptr();
-        unsafe {
-            let offset = ptr.add(idx * size);
-            std::slice::from_raw_parts(offset, size)
-        }
-    }
-
-    /// Treat s as 2-dimension array: [[Q; size]; x] and return &s[idx][..]
-    fn unchecked_mut_slice<Q>(s: &mut [Q], size: usize, idx: usize) -> &mut [Q] {
-        let ptr = s.as_mut_ptr();
-        unsafe {
-            let offset = ptr.add(idx * size);
-            std::slice::from_raw_parts_mut(offset, size)
-        }
     }
 }

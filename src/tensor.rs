@@ -1,9 +1,12 @@
 use std::{
     io::Read,
-    ops::{Deref, Index},
+    ops::{Deref, DerefMut, Index, IndexMut},
 };
 
-use crate::{Float, Result};
+use crate::Result;
+
+// in case we will support f16/bf16
+pub type Float = f32;
 
 #[cfg(feature = "q8")]
 pub(crate) const Q_GROUP_SIZE: usize = 32;
@@ -16,33 +19,119 @@ pub type QTensor = Tensor<i8>;
 
 #[derive(Debug)]
 pub struct Tensor<QType> {
-    weight: Vec<QType>,
-    // from outer to inner: ..., row, col(group)
-    layout: Vec<usize>,
+    value: Vec<QType>,
+    // row-wise: ..., layer, row, col
+    shape: Vec<usize>,
+    numel: usize,
+    // for group which col % group = 0
+    // ie, its scale: ..., layer, col/group
     #[cfg(feature = "q8")]
     scale: Vec<Float>,
+}
+
+impl<QType> Tensor<QType> {
+    pub fn new(shape: &[usize]) -> Self
+    where
+        QType: Clone + Default,
+    {
+        assert!(!shape.is_empty());
+        #[cfg(feature = "q8")]
+        assert_eq!(shape.last().unwrap() % Q_GROUP_SIZE, 0);
+
+        let numel = shape.iter().product();
+        Self {
+            value: vec![QType::default(); numel],
+            shape: shape.to_owned(),
+            numel,
+            #[cfg(feature = "q8")]
+            scale: vec![Float::default(); numel / Q_GROUP_SIZE],
+        }
+    }
+
+    pub fn copy_from_slice(&mut self, src: &[QType])
+    where
+        QType: Copy,
+    {
+        assert_eq!(self.value.len(), src.len());
+        self.value.as_mut_slice().copy_from_slice(src);
+    }
 }
 
 impl<QType> Deref for Tensor<QType> {
     type Target = [QType];
 
     fn deref(&self) -> &Self::Target {
-        &self.weight
+        &self.value
     }
 }
 
-/// Tensor<Float> does not use scale
+impl<QType> DerefMut for Tensor<QType> {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.value
+    }
+}
+
+// Tensor<Float> does not use scale
 impl Index<usize> for Tensor<Float> {
     type Output = [Float];
 
     fn index(&self, index: usize) -> &Self::Output {
-        let (rows, cols) = (self.layout[0], self.layout[1]);
-        assert!(index < rows);
+        let douter = self.shape[0];
+        assert!(index < douter);
+        let numel = self.numel / douter;
 
-        let ptr = self.weight.as_ptr();
+        let ptr = self.value.as_ptr();
         unsafe {
-            let offset = ptr.add(index * cols);
-            std::slice::from_raw_parts(offset, cols)
+            let offset = ptr.add(index * numel);
+            std::slice::from_raw_parts(offset, numel)
+        }
+    }
+}
+
+impl IndexMut<usize> for Tensor<Float> {
+    fn index_mut(&mut self, index: usize) -> &mut Self::Output {
+        let douter = self.shape[0];
+        assert!(index < douter);
+        let numel = self.numel / douter;
+
+        let ptr = self.value.as_mut_ptr();
+        unsafe {
+            let offset = ptr.add(index * numel);
+            std::slice::from_raw_parts_mut(offset, numel)
+        }
+    }
+}
+
+impl Index<(usize, usize)> for Tensor<Float> {
+    type Output = [Float];
+
+    fn index(&self, index: (usize, usize)) -> &Self::Output {
+        assert!(self.shape.len() > 2);
+        let (douter, dinner) = (self.shape[0], self.shape[1]);
+        assert!(index.0 < douter);
+        assert!(index.1 < dinner);
+        let numel = self.numel / (douter * dinner);
+
+        let ptr = self.value.as_ptr();
+        unsafe {
+            let offset = ptr.add(index.0 * (self.numel / douter) + index.1 * numel);
+            std::slice::from_raw_parts(offset, numel)
+        }
+    }
+}
+
+impl IndexMut<(usize, usize)> for Tensor<Float> {
+    fn index_mut(&mut self, index: (usize, usize)) -> &mut Self::Output {
+        assert!(self.shape.len() > 2);
+        let (douter, dinner) = (self.shape[0], self.shape[1]);
+        assert!(index.0 < douter);
+        assert!(index.1 < dinner);
+        let numel = self.numel / (douter * dinner);
+
+        let ptr = self.value.as_mut_ptr();
+        unsafe {
+            let offset = ptr.add(index.0 * (self.numel / douter) + index.1 * numel);
+            std::slice::from_raw_parts_mut(offset, numel)
         }
     }
 }
@@ -51,12 +140,12 @@ impl Index<usize> for Tensor<Float> {
 #[cfg(feature = "q8")]
 impl<QType> Tensor<QType> {
     fn index_row_and_scale(&self, idx: usize) -> (&[QType], &[Float]) {
-        let (rows, cols) = (self.layout[0], self.layout[1]);
+        let (rows, cols) = (self.shape[0], self.shape[1]);
         assert!(idx < rows);
         assert_eq!(cols % Q_GROUP_SIZE, 0);
 
         let scale_size = cols / Q_GROUP_SIZE;
-        let ptr = self.weight.as_ptr();
+        let ptr = self.value.as_ptr();
         let scale_ptr = self.scale.as_ptr();
         unsafe {
             let offset = ptr.add(idx * cols);
@@ -137,11 +226,30 @@ impl Tensor<Float> {
             let float_ptr = raw_tensor.as_ptr() as *const Float;
             let data = std::slice::from_raw_parts(float_ptr, num).to_vec();
             Ok(Self {
-                weight: data,
-                layout: vec![rows, cols],
+                value: data,
+                shape: vec![rows, cols],
+                numel: rows * cols,
                 #[cfg(feature = "q8")]
                 scale: vec![1 as Float; (rows * cols) / Q_GROUP_SIZE],
             })
+        }
+    }
+
+    /// Treat s as 2-dimension array: [[Float; size]; x] and return &s[idx][..]
+    pub fn unchecked_slice(&self, size: usize, idx: usize) -> &[Float] {
+        let ptr = self.value.as_ptr();
+        unsafe {
+            let offset = ptr.add(idx * size);
+            std::slice::from_raw_parts(offset, size)
+        }
+    }
+
+    /// Treat s as 2-dimension array: [[Float; size]; x] and return &s[idx][..]
+    pub fn unchecked_mut_slice(&mut self, size: usize, idx: usize) -> &mut [Float] {
+        let ptr = self.value.as_mut_ptr();
+        unsafe {
+            let offset = ptr.add(idx * size);
+            std::slice::from_raw_parts_mut(offset, size)
         }
     }
 }
@@ -210,8 +318,9 @@ impl Tensor<i8> {
             .unzip();
 
         Ok(Self {
-            weight: data.into_iter().flatten().collect(),
-            layout: vec![rows, cols],
+            value: data.into_iter().flatten().collect(),
+            shape: vec![rows, cols],
+            numel: rows * cols,
             scale,
         })
     }

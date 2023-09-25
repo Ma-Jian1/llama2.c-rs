@@ -1,58 +1,58 @@
-use crate::{config::Config, Float};
+use crate::{config::Config, tensor::DTensor};
 
 pub struct State {
     /// activation at current time stamp
     /// (dim,)
-    pub x: Vec<Float>,
+    pub x: DTensor,
     /// same, but inside a residual branch
     /// (dim,)
-    pub xb: Vec<Float>,
+    pub xb: DTensor,
     /// an additional buffer just for convenience
     /// (dim,)
-    pub xb2: Vec<Float>,
+    pub xb2: DTensor,
     /// buffer for hidden dimension in the ffn
     /// (hidden_dim,)
-    pub hb: Vec<Float>,
+    pub hb: DTensor,
     /// buffer for hidden dimension in the ffn
     /// (hidden_dim,)
-    pub hb2: Vec<Float>,
+    pub hb2: DTensor,
     /// query
     /// (dim,)
-    pub q: Vec<Float>,
+    pub q: DTensor,
     /// key
     /// (kv_dim,)
-    pub k: Vec<Float>,
+    pub k: DTensor,
     /// value
     /// (kv_dim,)
-    pub v: Vec<Float>,
+    pub v: DTensor,
     /// buffer for scores/attention values
     /// (n_heads, seq_len)
-    pub att: Vec<Float>,
+    pub att: DTensor,
     /// output logits
     /// (vocab_size,)
-    pub logits: Vec<Float>,
+    pub logits: DTensor,
     /// kv cache
     /// (layer, seq_len, kv_dim)
-    pub key_cache: Vec<Float>,
-    pub value_cache: Vec<Float>,
+    pub key_cache: DTensor,
+    pub value_cache: DTensor,
 }
 
 impl State {
     pub fn new(conf: &Config) -> Self {
         let kv_dim = (conf.dim * conf.n_kv_heads) / conf.n_heads;
         Self {
-            x: vec![0.0; conf.dim],
-            xb: vec![0.0; conf.dim],
-            xb2: vec![0.0; conf.dim],
-            hb: vec![0.0; conf.hidden_dim],
-            hb2: vec![0.0; conf.hidden_dim],
-            q: vec![0.0; conf.dim],
-            k: vec![0.0; kv_dim],
-            v: vec![0.0; kv_dim],
-            att: vec![0.0; conf.n_heads * conf.seq_len],
-            logits: vec![0.0; conf.vocab_size],
-            key_cache: vec![0.0; conf.n_layers * conf.seq_len * kv_dim],
-            value_cache: vec![0.0; conf.n_layers * conf.seq_len * kv_dim],
+            x: DTensor::new(&[conf.dim]),
+            xb: DTensor::new(&[conf.dim]),
+            xb2: DTensor::new(&[conf.dim]),
+            hb: DTensor::new(&[conf.hidden_dim]),
+            hb2: DTensor::new(&[conf.hidden_dim]),
+            q: DTensor::new(&[conf.dim]),
+            k: DTensor::new(&[kv_dim]),
+            v: DTensor::new(&[kv_dim]),
+            att: DTensor::new(&[conf.n_heads, conf.seq_len]),
+            logits: DTensor::new(&[conf.vocab_size]),
+            key_cache: DTensor::new(&[conf.n_layers, conf.seq_len, kv_dim]),
+            value_cache: DTensor::new(&[conf.n_layers, conf.seq_len, kv_dim]),
         }
     }
 }
